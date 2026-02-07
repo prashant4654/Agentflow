@@ -230,3 +230,4 @@ class AgentRegistry:
         """Clear all registered agents."""
         async with self._lock:
             self._agents.clear()
+

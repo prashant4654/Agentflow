@@ -3,9 +3,11 @@
 import asyncio
 import logging
 from collections import defaultdict
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
 
-from agentflow.protocols.acp import ACPMessage, ACPMessageType
+from agentflow.protocols.acp import ACPMessage
+
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +125,7 @@ class MessageRouter:
                 try:
                     response = await handler(message)
                     logger.debug(
-                        f"Message {message.message_id} delivered to "
-                        f"{message.recipient_id}"
+                        f"Message {message.message_id} delivered to {message.recipient_id}"
                     )
                     return response
                 except Exception as e:
@@ -134,9 +135,7 @@ class MessageRouter:
                     )
                     return None
             else:
-                logger.warning(
-                    f"No handler found for agent: {message.recipient_id}"
-                )
+                logger.warning(f"No handler found for agent: {message.recipient_id}")
                 return None
 
         except Exception as e:
@@ -203,9 +202,7 @@ class MessageRouter:
                 if handler:
                     try:
                         await handler(message)
-                        logger.debug(
-                            f"Message published to {agent_id} on topic {topic}"
-                        )
+                        logger.debug(f"Message published to {agent_id} on topic {topic}")
                     except Exception as e:
                         logger.error(
                             f"Error publishing to {agent_id}: {e}",

@@ -6,10 +6,12 @@ any agent in the system.
 """
 
 import logging
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from agentflow.communication.a2a import A2ACommunicationManager
 from agentflow.protocols.acp import ACPMessage
+
 
 logger = logging.getLogger(__name__)
 
@@ -47,15 +49,11 @@ class AgentCommunicator:
         self.agent_type = agent_type
         self.capabilities = capabilities or []
         self.metadata = metadata or {}
-        self._message_callbacks: list[
-            Callable[[ACPMessage], Coroutine[Any, Any, None]]
-        ] = []
+        self._message_callbacks: list[Callable[[ACPMessage], Coroutine[Any, Any, None]]] = []
 
     async def register(
         self,
-        message_handler: Callable[
-            [ACPMessage], Coroutine[Any, Any, ACPMessage | None]
-        ]
+        message_handler: Callable[[ACPMessage], Coroutine[Any, Any, ACPMessage | None]]
         | None = None,
     ) -> bool:
         """
@@ -250,9 +248,7 @@ class AgentCommunicator:
         """
         self._message_callbacks.append(callback)
 
-    async def _default_message_handler(
-        self, message: ACPMessage
-    ) -> ACPMessage | None:
+    async def _default_message_handler(self, message: ACPMessage) -> ACPMessage | None:
         """
         Default message handler that triggers callbacks.
 

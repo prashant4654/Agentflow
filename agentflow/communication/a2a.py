@@ -5,13 +5,14 @@ Provides high-level API for agent communication, including direct messaging,
 broadcasting, and pub-sub patterns.
 """
 
-import asyncio
 import logging
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from agentflow.communication.registry import AgentRegistry, AgentRegistryEntry
 from agentflow.communication.router import MessageRouter
 from agentflow.protocols.acp import ACPMessage, ACPProtocol
+
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +54,7 @@ class A2ACommunicationManager:
         agent_type: str = "agent",
         capabilities: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
-        message_handler: Callable[
-            [ACPMessage], Coroutine[Any, Any, ACPMessage | None]
-        ]
+        message_handler: Callable[[ACPMessage], Coroutine[Any, Any, ACPMessage | None]]
         | None = None,
     ) -> bool:
         """
@@ -88,8 +87,7 @@ class A2ACommunicationManager:
             await self.router.register_broadcast_handler(agent_id, message_handler)
 
         logger.info(
-            f"Agent '{agent_name}' ({agent_id}) "
-            f"{'registered' if registered else 'updated'}"
+            f"Agent '{agent_name}' ({agent_id}) {'registered' if registered else 'updated'}"
         )
         return registered
 
@@ -261,9 +259,7 @@ class A2ACommunicationManager:
             **kwargs,
         )
 
-        logger.debug(
-            f"Sending response from {sender_id} to {request_message.sender_id}"
-        )
+        logger.debug(f"Sending response from {sender_id} to {request_message.sender_id}")
         await self.router.route_message(response)
 
     async def subscribe_to_topic(self, agent_id: str, topic: str) -> None:
@@ -355,9 +351,7 @@ class A2ACommunicationManager:
         """
         return await self.registry.list_agents(agent_type=agent_type, status=status)
 
-    async def find_agents_by_capability(
-        self, capability: str
-    ) -> list[AgentRegistryEntry]:
+    async def find_agents_by_capability(self, capability: str) -> list[AgentRegistryEntry]:
         """
         Find agents with a specific capability.
 

@@ -427,7 +427,7 @@ class Agent(BaseAgent):
                     system_instruction = str(content)
                 else:
                     system_instruction += "\n" + str(content)
-            elif role in ["user", "assistant"]:
+            else:
                 google_contents.append(str(content))
 
         return system_instruction, google_contents
