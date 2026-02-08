@@ -172,6 +172,10 @@ class Agent(BaseAgent):
         # Call parent constructor
         super().__init__(model=model, system_prompt=system_prompt or [], tools=tools, **kwargs)
 
+        # check user sending model and provider as prefix, if provider is not explicitly provided
+        if "/" in model:
+            provider, model = model.split("/", 1)
+
         # Store output type
         self.output_type = output_type.lower()
 
