@@ -48,7 +48,14 @@ from .id_generator import (
     TimestampIDGenerator,
     UUIDGenerator,
 )
-from .logging import logger
+from .logging import (
+    configure_logging,
+    disable_debug,
+    enable_debug,
+    get_logger,
+    is_reasoning_logging_enabled,
+    logger,
+)
 from .shutdown import (
     DelayedKeyboardInterrupt,
     GracefulShutdownManager,
@@ -101,10 +108,15 @@ __all__ = [
     "add_messages",
     "append_items",
     "call_sync_or_async",
+    "configure_logging",
     "convert_messages",
     "delayed_keyboard_interrupt",
+    "disable_debug",
+    "enable_debug",
+    "get_logger",
     "get_tool_metadata",
     "has_tool_decorator",
+    "is_reasoning_logging_enabled",
     "logger",
     "register_default_validators",
     "replace_messages",

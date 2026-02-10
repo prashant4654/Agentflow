@@ -21,8 +21,8 @@ from agentflow.graph.utils.utils import (
 from agentflow.publisher.events import ContentType, Event, EventModel, EventType
 from agentflow.publisher.publish import publish_event
 from agentflow.state import AgentState, ExecutionStatus, Message
-from agentflow.state.message_block import RemoteToolCallBlock
-from agentflow.utils import END, START, ResponseGranularity
+from agentflow.state.message_block import ReasoningBlock, RemoteToolCallBlock
+from agentflow.utils import END, START, ResponseGranularity, is_reasoning_logging_enabled
 from agentflow.state.reducers import add_messages
 
 from .handler_mixins import (
@@ -59,6 +59,39 @@ class InvokeHandler[StateT: AgentState](
         self.interrupt_after = interrupt_after or []
         # And set via mixin for a single source of truth
         self._set_interrupts(interrupt_before, interrupt_after)
+
+    def _log_reasoning_blocks(
+        self,
+        messages: list[Message],
+        node_name: str,
+    ) -> None:
+        """Extract and log reasoning blocks from messages if reasoning logging is enabled."""
+        if not is_reasoning_logging_enabled():
+            return
+
+        for msg_idx, message in enumerate(messages):
+            if not isinstance(message.content, list):
+                continue
+
+            for block_idx, block in enumerate(message.content):
+                if isinstance(block, ReasoningBlock):
+                    logger.info(
+                        "[REASONING] Node=%s, Message=%d, Block=%d: %s",
+                        node_name,
+                        msg_idx,
+                        block_idx,
+                        block.summary,
+                    )
+                    if block.details:
+                        for detail_idx, detail in enumerate(block.details):
+                            logger.debug(
+                                "[REASONING_DETAIL] Node=%s, Message=%d, Block=%d, Detail=%d: %s",
+                                node_name,
+                                msg_idx,
+                                block_idx,
+                                detail_idx,
+                                detail,
+                            )
 
     async def _check_interrupted(
         self,
@@ -346,6 +379,8 @@ class InvokeHandler[StateT: AgentState](
                         len(result),
                         len(messages),
                     )
+                    # Log reasoning blocks if enabled
+                    self._log_reasoning_blocks(result, current_node)
                     # Add messages to state context so they're visible to subsequent nodes
                     state.context = add_messages(state.context, result)
 
@@ -362,6 +397,8 @@ class InvokeHandler[StateT: AgentState](
                             len(new_messages),
                             len(messages),
                         )
+                        # Log reasoning blocks if enabled
+                        self._log_reasoning_blocks(new_messages, current_node)
 
                 logger.debug(
                     "Node result processed, next_node=%s, total_messages=%d",

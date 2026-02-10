@@ -23,9 +23,9 @@ from agentflow.graph.node import Node
 from agentflow.publisher.events import ContentType, Event, EventModel, EventType
 from agentflow.publisher.publish import publish_event
 from agentflow.state import AgentState, ExecutionStatus, Message, ErrorBlock
-from agentflow.state.message_block import RemoteToolCallBlock
+from agentflow.state.message_block import ReasoningBlock, RemoteToolCallBlock
 from agentflow.state.stream_chunks import StreamChunk, StreamEvent
-from agentflow.utils import END, START, ResponseGranularity, add_messages
+from agentflow.utils import END, START, ResponseGranularity, add_messages, is_reasoning_logging_enabled
 
 from .handler_mixins import (
     BaseLoggingMixin,
@@ -88,6 +88,39 @@ class StreamHandler[StateT: AgentState](
         self.interrupt_before = interrupt_before or []
         self.interrupt_after = interrupt_after or []
         self._set_interrupts(interrupt_before, interrupt_after)
+
+    def _log_reasoning_blocks(
+        self,
+        messages: list[Message],
+        node_name: str,
+    ) -> None:
+        """Extract and log reasoning blocks from messages if reasoning logging is enabled."""
+        if not is_reasoning_logging_enabled():
+            return
+
+        for msg_idx, message in enumerate(messages):
+            if not isinstance(message.content, list):
+                continue
+
+            for block_idx, block in enumerate(message.content):
+                if isinstance(block, ReasoningBlock):
+                    logger.info(
+                        "[REASONING] Node=%s, Message=%d, Block=%d: %s",
+                        node_name,
+                        msg_idx,
+                        block_idx,
+                        block.summary,
+                    )
+                    if block.details:
+                        for detail_idx, detail in enumerate(block.details):
+                            logger.debug(
+                                "[REASONING_DETAIL] Node=%s, Message=%d, Block=%d, Detail=%d: %s",
+                                node_name,
+                                msg_idx,
+                                block_idx,
+                                detail_idx,
+                                detail,
+                            )
 
     async def _check_interrupted(
         self,
@@ -506,6 +539,8 @@ class StreamHandler[StateT: AgentState](
                 if messages:
                     state.context = add_messages(state.context, messages)
                     logger.debug("Added %d messages to state context", len(messages))
+                    # Log reasoning blocks if enabled
+                    self._log_reasoning_blocks(messages, current_node)
                     yield StreamChunk(
                         event=StreamEvent.STATE,
                         state=state,
