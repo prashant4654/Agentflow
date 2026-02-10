@@ -17,8 +17,8 @@ import logging
 import os
 from typing import Any
 
-from agentflow import AgentState, StateGraph
-from agentflow.state import Message
+from agentflow.graph import StateGraph
+from agentflow.state import AgentState, Message
 from agentflow.state.message_block import ReasoningBlock, TextBlock
 from agentflow.utils import (
     configure_logging,
@@ -188,7 +188,11 @@ async def example_graph_with_logging():
     result = await compiled.ainvoke(input_data)
 
     logger.info("Graph execution completed")
-    logger.debug("Result state has %d messages", len(result.context))
+    logger.debug("Result type: %s", type(result).__name__)
+    if hasattr(result, "context"):
+        logger.debug("Result state has %d messages", len(result.context))
+    elif isinstance(result, dict) and "context" in result:
+        logger.debug("Result dict has %d messages in context", len(result["context"]))
 
     # Clean up
     await compiled.aclose()
