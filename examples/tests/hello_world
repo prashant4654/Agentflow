@@ -1,0 +1,86 @@
+from dotenv import load_dotenv
+from agentflow.graph import Agent, StateGraph, ToolNode
+from agentflow.state import AgentState, Message
+from agentflow.utils.constants import END
+
+load_dotenv()  # Load API keys from .env file
+
+
+# Step 1: Define a tool (just a Python function!)
+def get_weather(location: str) -> str:
+    """Get the current weather for a specific location."""
+    return f"The weather in {location} is sunny, 72°F"
+
+
+# Step 2: Create tool node
+tool_node = ToolNode([get_weather])
+
+
+# Step 3: Build the workflow
+graph = StateGraph()
+
+# Add agent node using Agent class
+graph.add_node(
+    "MAIN",
+    Agent(
+        model="google/gemini-2.5-flash",  # Works with google-genai library
+        system_prompt=[{
+            "role": "system",
+            "content": "You are a helpful assistant. Help user queries effectively."
+        }],
+        tool_node_name="TOOL",  # Connect to tools
+    ),
+)
+graph.add_node("TOOL", tool_node)
+
+
+# Step 4: Define routing logic
+def should_use_tools(state: AgentState) -> str:
+    """Determine if we should use tools or end."""
+    if not state.context or len(state.context) == 0:
+        return END
+
+    last_message = state.context[-1]
+
+    # If agent wants to call tools, route to TOOL
+    if (
+        hasattr(last_message, "tools_calls")
+        and last_message.tools_calls
+        and last_message.role == "assistant"
+    ):
+        return "TOOL"
+
+    # After tool execution, go back to MAIN
+    if last_message.role == "tool":
+        return "MAIN"
+
+    return END
+
+
+# Step 5: Set up the flow
+graph.add_conditional_edges(
+    "MAIN",
+    should_use_tools,
+    {"TOOL": "TOOL", END: END},
+)
+graph.add_edge("TOOL", "MAIN")  # After tools, return to agent
+graph.set_entry_point("MAIN")
+
+# Step 6: Compile
+app = graph.compile()
+
+
+# Step 7: Run it!
+if __name__ == "__main__":
+    inp = {"messages": [Message.text_message("What's the weather in New York?")]}
+    config = {"thread_id": "12345", "recursion_limit": 10}
+
+    res = app.invoke(inp, config=config)
+
+    # Print all messages in the conversation
+    for msg in res["messages"]:
+        print("=" * 50)
+        print(f"Role: {msg.role}")
+        if msg.content:
+            print(f"Content: {msg.content}")
+        print("=" * 50)

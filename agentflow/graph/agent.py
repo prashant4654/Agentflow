@@ -175,6 +175,7 @@ class Agent(BaseAgent):
         # check user sending model and provider as prefix, if provider is not explicitly provided
         if "/" in model:
             provider, model = model.split("/", 1)
+            self.model=model
 
         # Store output type
         self.output_type = output_type.lower()
