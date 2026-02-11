@@ -3,6 +3,12 @@ from agentflow.state.agent_state import AgentState
 from agentflow.state.message import Message
 from agentflow.state.message_context_manager import MessageContextManager
 from agentflow.utils.constants import END
+from dotenv import load_dotenv
+import os
+load_dotenv()
+
+if os.getenv("GEMINI_API_KEY"):
+    os.environ["GEMINI_API_KEY"] = os.getenv("GEMINI_API_KEY")
 
 
 def get_weather(
@@ -22,7 +28,7 @@ graph = StateGraph()
 graph.add_node(
     "MAIN",
     Agent(
-        model="gemini/gemini-2.5-flash",
+        model="google/gemini-2.5-flash",
         system_prompt=[
             {
                 "role": "system",
@@ -74,7 +80,7 @@ app = graph.compile()
 
 
 if __name__ == "__main__":
-    inp = {"messages": [Message.text_message("How are you today?")]}
+    inp = {"messages": [Message.text_message("How is weather?")]}
     config = {"thread_id": "12345", "recursion_limit": 10}
 
     res = app.invoke(inp, config=config)

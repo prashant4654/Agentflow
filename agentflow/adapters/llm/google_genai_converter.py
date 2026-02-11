@@ -128,7 +128,7 @@ class GoogleGenAIConverter(BaseConverter):
             total_tokens=getattr(usage_metadata, "total_token_count", 0) or 0,
             cache_creation_input_tokens=0,
             cache_read_input_tokens=getattr(usage_metadata, "cached_content_token_count", 0) or 0,
-            reasoning_tokens=0,
+            reasoning_tokens=getattr(usage_metadata, "thoughts_token_count", 0) or 0,
         )
 
     def _process_parts(self, parts: list) -> tuple[list, list, str]:
