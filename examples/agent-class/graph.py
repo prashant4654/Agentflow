@@ -80,7 +80,7 @@ app = graph.compile()
 
 
 if __name__ == "__main__":
-    inp = {"messages": [Message.text_message("How is weather?")]}
+    inp = {"messages": [Message.text_message("How is weather in London?")]}
     config = {"thread_id": "12345", "recursion_limit": 10}
 
     res = app.invoke(inp, config=config)

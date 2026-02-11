@@ -529,6 +529,12 @@ class Agent(BaseAgent):
                 # Wrap FunctionDeclarations in a Tool object
                 config_kwargs["tools"] = [types.Tool(function_declarations=function_declarations)]
 
+        # This allows the model to return reasoning content as part of the response
+        if self.output_type == "text":
+            config_kwargs["thinking_config"] = types.ThinkingConfig(
+                include_thoughts=True
+            )
+
         return types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
 
     async def _call_openai(

@@ -138,10 +138,12 @@ class GoogleGenAIConverter(BaseConverter):
         reasoning_content = ""
 
         for part in parts:
-            self._process_text_part(part, blocks)
             reasoning = self._process_reasoning_part(part, blocks)
             if reasoning:
                 reasoning_content = reasoning
+                continue
+            
+            self._process_text_part(part, blocks)
             self._process_function_call_part(part, blocks, tools_calls)
             self._process_inline_media_part(part, blocks)
             self._process_file_media_part(part, blocks)
@@ -154,10 +156,14 @@ class GoogleGenAIConverter(BaseConverter):
             blocks.append(TextBlock(text=part.text))
 
     def _process_reasoning_part(self, part: Any, blocks: list) -> str:
-        """Process reasoning (thought) part."""
+        """Process reasoning (thought) part.
+        """
         if hasattr(part, "thought") and part.thought:
-            blocks.append(ReasoningBlock(summary=part.thought))
-            return part.thought
+            # When part.thought is True, the actual content is in part.text
+            thought_content = part.text if hasattr(part, "text") else ""
+            if thought_content:
+                blocks.append(ReasoningBlock(summary=thought_content))
+            return thought_content
         return ""
 
     def _process_function_call_part(self, part: Any, blocks: list, tools_calls: list) -> None:
@@ -243,15 +249,19 @@ class GoogleGenAIConverter(BaseConverter):
         parts = content.parts if content else []
 
         for part in parts:
+            # Handle thought parts (reasoning) first
+            if hasattr(part, "thought") and part.thought:
+                thought_content = part.text if hasattr(part, "text") else ""
+                if thought_content:
+                    reasoning_part += thought_content
+                    content_blocks.append(ReasoningBlock(summary=thought_content))
+                # Skip text processing for thought parts
+                continue
+
             # Handle text parts
-            if part.text:
+            if hasattr(part, "text") and part.text:
                 text_part += part.text
                 content_blocks.append(TextBlock(text=part.text))
-
-            # Handle thought parts (reasoning)
-            if hasattr(part, "thought") and part.thought:
-                reasoning_part += part.thought
-                content_blocks.append(ReasoningBlock(summary=part.thought))
 
             # Handle function calls
             if hasattr(part, "function_call") and part.function_call:
