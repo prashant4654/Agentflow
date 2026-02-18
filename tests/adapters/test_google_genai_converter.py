@@ -72,12 +72,13 @@ class MockUsageMetadata:
     """Mock UsageMetadata for testing."""
 
     def __init__(
-        self, candidates_token_count=0, prompt_token_count=0, total_token_count=0
+        self, candidates_token_count=0, prompt_token_count=0, total_token_count=0, thoughts_token_count=0
     ):
         self.candidates_token_count = candidates_token_count
         self.prompt_token_count = prompt_token_count
         self.total_token_count = total_token_count
         self.cached_content_token_count = 0
+        self.thoughts_token_count = thoughts_token_count
 
 
 class MockGenerateContentResponse:
@@ -137,11 +138,18 @@ class TestGoogleGenAIConverter:
     async def test_convert_response_with_reasoning(self, converter):
         """Test converting a response with reasoning/thoughts."""
         # Create mock response with text and thought
+        # Google GenAI uses thought=True as a boolean flag; reasoning text is in part.text
         text_part = MockPart(text="The answer is 42")
-        thought_part = MockPart(thought="I need to think deeply about this question")
+        thought_part = MockPart(text="I need to think deeply about this question", thought=True)
         content = MockContent(parts=[text_part, thought_part])
         candidate = MockCandidate(content=content)
-        response = MockGenerateContentResponse(candidates=[candidate])
+        usage = MockUsageMetadata(
+            candidates_token_count=5,
+            prompt_token_count=3,
+            total_token_count=8,
+            thoughts_token_count=12
+        )
+        response = MockGenerateContentResponse(candidates=[candidate], usage_metadata=usage)
 
         # Convert response
         message = await converter.convert_response(response)
@@ -152,6 +160,11 @@ class TestGoogleGenAIConverter:
         assert isinstance(message.content[1], ReasoningBlock)
         assert message.content[1].summary == "I need to think deeply about this question"
         assert message.reasoning == "I need to think deeply about this question"
+        # Verify token usage including reasoning tokens
+        assert message.usages.completion_tokens == 5
+        assert message.usages.prompt_tokens == 3
+        assert message.usages.total_tokens == 8
+        assert message.usages.reasoning_tokens == 12
 
     @pytest.mark.asyncio
     async def test_convert_response_with_function_call(self, converter):
@@ -240,8 +253,9 @@ class TestGoogleGenAIConverter:
     async def test_convert_response_with_multiple_parts(self, converter):
         """Test converting a response with multiple parts."""
         # Create mock response with text, thought, and function call
+        # Google GenAI uses thought=True as a boolean flag; reasoning text is in part.text
         text_part = MockPart(text="Here's what I found:")
-        thought_part = MockPart(thought="Analyzing the request")
+        thought_part = MockPart(text="Analyzing the request", thought=True)
         func_call = MockFunctionCall(name="search", args={"query": "python"})
         func_part = MockPart(function_call=func_call)
 
