@@ -12,13 +12,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import pytest
-
 
 if TYPE_CHECKING:
-    from agentflow.evaluation.eval_config import EvalConfig
+    from agentflow.evaluation.config.eval_config import EvalConfig
     from agentflow.evaluation.eval_result import EvalReport
-    from agentflow.evaluation.evaluator import AgentEvaluator
     from agentflow.graph.compiled_graph import CompiledGraph
 
 
@@ -71,26 +68,40 @@ def eval_test(
     Example:
         ```python
         @eval_test("tests/fixtures/weather_agent.evalset.json")
-        async def test_weather_agent(graph):
-            return graph  # Return the compiled graph to evaluate
+        async def test_weather_agent():
+            collector = TrajectoryCollector()
+            _, mgr = make_trajectory_callback(collector)
+            graph = build_weather_graph().compile(callback_manager=mgr)
+            return graph, collector
         ```
     """
 
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            from agentflow.evaluation import AgentEvaluator, EvalConfig
+            import pytest
+            from agentflow.evaluation import AgentEvaluator
+            from agentflow.evaluation.config.eval_config import EvalConfig
 
-            # Call the test function to get the graph
-            graph = await func(*args, **kwargs)
+            # Call the test function to get the graph and collector
+            result = await func(*args, **kwargs)
 
-            if graph is None:
+            if result is None:
                 pytest.skip("No graph returned from test function")
+                return
+
+            if isinstance(result, tuple) and len(result) == 2:
+                graph, collector = result
+            else:
+                pytest.fail(
+                    "eval_test decorated function must return (graph, collector) tuple. "
+                    "See eval_test docstring for usage."
+                )
                 return
 
             # Create evaluator
             eval_config = config or EvalConfig.default()
-            evaluator = AgentEvaluator(graph, eval_config)
+            evaluator = AgentEvaluator(graph, collector, config=eval_config)
 
             # Determine eval file path
             file_path = eval_file
@@ -191,13 +202,17 @@ def parametrize_eval_cases(eval_file: str) -> Callable:
     Example:
         ```python
         @parametrize_eval_cases("tests/fixtures/weather_agent.evalset.json")
-        async def test_single_case(graph, eval_case):
-            evaluator = AgentEvaluator(graph)
+        async def test_single_case(eval_case):
+            collector = TrajectoryCollector()
+            _, mgr = make_trajectory_callback(collector)
+            graph = build_agent().compile(callback_manager=mgr)
+            evaluator = AgentEvaluator(graph, collector)
             result = await evaluator._evaluate_case(eval_case)
             assert result.passed
         ```
     """
-    from agentflow.evaluation import EvalSet
+    import pytest
+    from agentflow.evaluation.dataset.eval_set import EvalSet
 
     eval_set = EvalSet.from_file(eval_file)
     cases = [(case.eval_id, case) for case in eval_set.eval_cases]
@@ -238,14 +253,38 @@ class EvalFixtures:
         Returns:
             Factory function that creates AgentEvaluator instances.
         """
-        from agentflow.evaluation import AgentEvaluator, EvalConfig
+        from agentflow.evaluation import AgentEvaluator
+        from agentflow.evaluation.config.eval_config import EvalConfig
 
         default = self.default_config
 
-        def factory(graph: CompiledGraph, config: EvalConfig | None = None) -> AgentEvaluator:
-            return AgentEvaluator(graph, config or default or EvalConfig.default())
+        def factory(
+            graph: CompiledGraph,
+            collector: Any,
+            config: EvalConfig | None = None,
+        ) -> AgentEvaluator:
+            return AgentEvaluator(graph, collector, config=config or default or EvalConfig.default())
 
         return factory
+
+
+class EvalPlugin:
+    """Pytest plugin for agent evaluation.
+
+    Provides pytest integration for running agent evaluations as part
+    of the test suite.
+    """
+
+    def __init__(self):
+        pass
+
+    def pytest_configure(self, config):
+        """Configure pytest with evaluation plugin."""
+        pass
+
+    def pytest_collection_modifyitems(self, config, items):
+        """Modify collected test items."""
+        pass
 
 
 # Fixture-style helpers that can be used directly
@@ -253,6 +292,7 @@ class EvalFixtures:
 
 async def run_eval(
     graph: CompiledGraph,
+    collector: Any,
     eval_set_path: str,
     config: EvalConfig | None = None,
     verbose: bool = False,
@@ -262,8 +302,10 @@ async def run_eval(
     Convenience function for running evaluations in tests.
 
     Args:
-        graph: The compiled graph to evaluate.
-        eval_set_path: Path to eval set file.
+        graph: The compiled graph to evaluate. Must be compiled with
+               the collector's callback_manager.
+        collector: TrajectoryCollector wired into the graph at compile time.
+        eval_set_path: Path to eval set JSON file.
         config: Optional evaluation configuration.
         verbose: Whether to log progress.
 
@@ -273,15 +315,59 @@ async def run_eval(
     Example:
         ```python
         async def test_agent():
-            graph = my_agent.compile()
-            report = await run_eval(graph, "tests/fixtures/my_agent.evalset.json")
-            assert report.passed
+            collector = TrajectoryCollector(capture_all_events=True)
+            _, callback_mgr = make_trajectory_callback(collector)
+            graph = my_agent.compile(callback_manager=callback_mgr)
+            report = await run_eval(graph, collector, "tests/fixtures/my_agent.evalset.json")
+            assert report.summary.pass_rate == 1.0
         ```
     """
-    from agentflow.evaluation import AgentEvaluator, EvalConfig
+    from agentflow.evaluation import AgentEvaluator
+    from agentflow.evaluation.config.eval_config import EvalConfig as _EvalConfig
 
-    evaluator = AgentEvaluator(graph, config or EvalConfig.default())
+    evaluator = AgentEvaluator(graph, collector, config or _EvalConfig.default())
     return await evaluator.evaluate(eval_set_path, verbose=verbose)
+
+
+def create_eval_app(
+    graph: Any,
+    *,
+    capture_all_events: bool = True,
+) -> tuple[Any, Any]:
+    """Compile a StateGraph for evaluation with a TrajectoryCollector.
+
+    Handles all evaluation plumbing so the user only needs to provide
+    their graph.  Returns the compiled app and the collector — ready
+    for ``AgentEvaluator``.
+
+    Args:
+        graph: An *uncompiled* ``StateGraph`` instance.
+        capture_all_events: Forward to ``TrajectoryCollector``.
+
+    Returns:
+        ``(compiled_app, collector)`` tuple.
+
+    Example:
+        ```python
+        # conftest.py
+        from agentflow.evaluation.testing import create_eval_app
+
+        @pytest.fixture(scope="session")
+        def trajectory_app():
+            graph = build_my_graph()   # <-- only thing the user writes
+            return create_eval_app(graph)
+        ```
+    """
+    from agentflow.checkpointer import InMemoryCheckpointer
+    from agentflow.evaluation.collectors import TrajectoryCollector, make_trajectory_callback
+
+    collector = TrajectoryCollector(capture_all_events=capture_all_events)
+    _, callback_mgr = make_trajectory_callback(collector)
+    app = graph.compile(
+        checkpointer=InMemoryCheckpointer(),
+        callback_manager=callback_mgr,
+    )
+    return app, collector
 
 
 def create_simple_eval_set(
@@ -308,7 +394,7 @@ def create_simple_eval_set(
         )
         ```
     """
-    from agentflow.evaluation import EvalCase, EvalSet
+    from agentflow.evaluation.dataset.eval_set import EvalCase, EvalSet
 
     eval_cases = []
     for i, (query, expected, name) in enumerate(cases):
