@@ -262,7 +262,7 @@ class TestGraphFlow:
     async def test_graph_result_contains_assistant_message(self):
         """The final result must include the agent's response message."""
         from agentflow.graph import StateGraph, ToolNode
-        from agentflow.testing import TestAgent, MockToolRegistry
+        from agentflow.testing import MockToolRegistry, TestAgent
 
         mock_tools = MockToolRegistry()
         mock_tools.register("get_weather", lambda location, **_: f"Sunny in {location}")
