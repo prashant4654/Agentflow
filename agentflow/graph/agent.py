@@ -54,6 +54,9 @@ _CALL_EXCLUDED_KWARGS = _CLIENT_CONSTRUCTOR_KWARGS | frozenset(
     }
 )
 
+# Sentinel for reasoning_config default (avoids mutable default argument)
+_REASONING_DEFAULT: object = object()
+
 
 class Agent(BaseAgent):
     """A smart node function wrapper for LLM interactions.
@@ -114,7 +117,7 @@ class Agent(BaseAgent):
         extra_messages: list[Message] | None = None,
         trim_context: bool = False,
         tools_tags: set[str] | None = None,
-        reasoning_config: dict[str, Any] | None = {"effort": "medium"},
+        reasoning_config: dict[str, Any] | None = _REASONING_DEFAULT,  # type: ignore[assignment]
         **kwargs,
     ):
         """Initialize an Agent node.
@@ -148,10 +151,10 @@ class Agent(BaseAgent):
 
                 Examples::
 
-                    reasoning_config=None                                   # OFF for both
-                    reasoning_config={"effort": "high"}                     # high, both providers
-                    reasoning_config={"effort": "low", "summary": "auto"}  # OpenAI: low + summary; Google: low
-                    reasoning_config={"thinking_budget": 5000}              # Google exact budget; OpenAI: no effect
+                    reasoning_config=None                        # OFF for both
+                    reasoning_config={"effort": "high"}          # high, both providers
+                    reasoning_config={"effort": "low", "summary": "auto"}  # OpenAI: low+summary
+                    reasoning_config={"thinking_budget": 5000}   # Google exact budget
             **llm_kwargs: Additional provider-specific parameters
                 (temperature, max_tokens, top_p, or model args, organization_id, project_id).
 
@@ -211,7 +214,9 @@ class Agent(BaseAgent):
         base_url: str | None = kwargs.pop("base_url", None)
         api_style: str = kwargs.pop("api_style", "chat")
         # Call parent constructor
-        super().__init__(model=model, system_prompt=system_prompt or [], tools=tools, base_url=base_url, **kwargs)
+        super().__init__(
+            model=model, system_prompt=system_prompt or [], tools=tools, base_url=base_url, **kwargs
+        )
 
         # check user sending model and provider as prefix, if provider is not explicitly provided
         if "/" in model and provider is None:
@@ -222,6 +227,9 @@ class Agent(BaseAgent):
         self.output_type = output_type.lower()
 
         # Determine provider
+        # Must be assigned before _create_client() which reads self.llm_kwargs
+        self.llm_kwargs = kwargs
+
         if provider is not None:
             self.provider = provider.lower()
             self.base_url = base_url
@@ -237,7 +245,6 @@ class Agent(BaseAgent):
 
         self.extra_messages = extra_messages
         self.tools = tools
-        self.llm_kwargs = kwargs
         self.trim_context = trim_context
         self.tools_tags = tools_tags
         self.tool_node_name = tool_node_name
@@ -250,8 +257,13 @@ class Agent(BaseAgent):
             raise ValueError(f"Invalid api_style '{api_style}'. Supported: 'chat', 'responses'")
         self.api_style = api_style
 
-        # False is treated as None (explicit disable)
-        self.reasoning_config: dict[str, Any] | None = None if reasoning_config is False else reasoning_config
+        # Apply default (medium effort) when not explicitly provided;
+        # False or None = disabled.
+        if reasoning_config is _REASONING_DEFAULT:
+            reasoning_config = {"effort": "medium"}
+        self.reasoning_config: dict[str, Any] | None = (
+            None if reasoning_config is False else reasoning_config
+        )
 
         logger.info(
             f"Agent initialized: model={model}, provider={self.provider}, "
@@ -1058,4 +1070,4 @@ class Agent(BaseAgent):
         return ModelResponseConverter(
             response,
             converter=converter_key,
-        )                                                                                             
+        )
