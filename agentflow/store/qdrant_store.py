@@ -272,9 +272,7 @@ class QdrantStore(BaseStore):
                         field_name=field_name,
                         field_schema=PayloadSchemaType.KEYWORD,
                     )
-                logger.info(
-                    f"Created payload indexes for collection: {collection}"
-                )
+                logger.info(f"Created payload indexes for collection: {collection}")
 
             self._collection_cache.add(collection)
         except Exception as e:
@@ -534,12 +532,14 @@ class QdrantStore(BaseStore):
         # explicit values we set below (existing.metadata mirrors the full
         # Qdrant payload, including "content").
         _system_keys = {
-            "content", "user_id", "thread_id",
-            "memory_type", "category", "timestamp",
+            "content",
+            "user_id",
+            "thread_id",
+            "memory_type",
+            "category",
+            "timestamp",
         }
-        extra_metadata = {
-            k: v for k, v in updated_metadata.items() if k not in _system_keys
-        }
+        extra_metadata = {k: v for k, v in updated_metadata.items() if k not in _system_keys}
 
         updated_payload = {
             **extra_metadata,

@@ -3,7 +3,7 @@ Long-term memory integration for AgentFlow graphs.
 
 Primary API
 -----------
-    **MemoryIntegration** – single configuration point for adding long-term
+    **MemoryIntegration** - single configuration point for adding long-term
     memory to any agent graph. Users only need to specify a *store* and a
     *retrieval_mode* (``"no_retrieval"`` | ``"preload"`` | ``"postload"``).
 
@@ -48,10 +48,10 @@ Quick start
 
 Lower-level helpers (advanced / backwards-compatible)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    * ``memory_tool`` – the LLM-callable tool for CRUD on ``BaseStore``.
-    * ``create_memory_preload_node`` – factory that returns a graph node.
-    * ``get_memory_system_prompt`` – prompt fragment per retrieval mode.
-    * ``MemoryWriteTracker`` – tracks pending async writes.
+    * ``memory_tool`` - the LLM-callable tool for CRUD on ``BaseStore``.
+    * ``create_memory_preload_node`` - factory that returns a graph node.
+    * ``get_memory_system_prompt`` - prompt fragment per retrieval mode.
+    * ``MemoryWriteTracker`` - tracks pending async writes.
 """
 
 from __future__ import annotations
@@ -263,18 +263,14 @@ async def _do_write(
 
         # --- Strategy 1: key-based dedup (reliable for topic changes) ---
         if memory_key:
-            existing = await _find_duplicate_by_key(
-                store, config, memory_key, mem_type
-            )
+            existing = await _find_duplicate_by_key(store, config, memory_key, mem_type)
             if existing:
                 logger.info(
                     "Updating existing memory by key '%s' (id=%s)",
                     memory_key,
                     existing.id,
                 )
-                await store.aupdate(
-                    config, str(existing.id), content, metadata=metadata
-                )
+                await store.aupdate(config, str(existing.id), content, metadata=metadata)
                 return {
                     "status": "updated_existing",
                     "memory_id": str(existing.id),
@@ -282,9 +278,7 @@ async def _do_write(
                 }
 
         # --- Strategy 2: similarity-based dedup (catch identical text) ---
-        existing = await _find_duplicate_by_similarity(
-            store, config, content, mem_type
-        )
+        existing = await _find_duplicate_by_similarity(store, config, content, mem_type)
         if existing:
             logger.info(
                 "Skipping duplicate memory (score=%.3f, id=%s)",
@@ -668,9 +662,7 @@ class MemoryIntegration:
                 query_builder=self._query_builder,
                 limit=self._limit,
                 score_threshold=self._score_threshold,
-                system_prompt_template=(
-                    self._preload_prompt_template or _DEFAULT_MEMORY_PROMPT
-                ),
+                system_prompt_template=(self._preload_prompt_template or _DEFAULT_MEMORY_PROMPT),
                 max_tokens=self._max_tokens,
             )
 
@@ -717,7 +709,7 @@ class MemoryIntegration:
 
     def wire(
         self,
-        graph: "StateGraph",
+        graph: StateGraph,
         entry_to: str,
         preload_node_name: str = "memory_preload",
     ) -> None:
