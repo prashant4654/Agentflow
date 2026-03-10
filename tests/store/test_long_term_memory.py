@@ -10,11 +10,16 @@ import pytest
 from agentflow.state import AgentState, Message
 from agentflow.store.long_term_memory import (
     DEFAULT_READ_MODE,
+    _IDENTICAL_SCORE_THRESHOLD,
+    MemoryIntegration,
     MemoryWriteTracker,
     ReadMode,
     _do_write,
+    _find_duplicate_by_key,
+    _find_duplicate_by_similarity,
     _format_search_results,
     _validate_memory_type,
+    _write_tracker,
     create_memory_preload_node,
     get_memory_system_prompt,
     get_write_tracker,
@@ -26,6 +31,16 @@ from agentflow.store.store_schema import MemorySearchResult, MemoryType
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_write_tracker():
+    """Clear the global write tracker between tests so stale tasks from
+    one test don't affect another (each pytest-asyncio test gets a fresh
+    event loop)."""
+    _write_tracker._pending.clear()
+    yield
+    _write_tracker._pending.clear()
 
 
 @pytest.fixture()
@@ -135,6 +150,8 @@ class TestFormatSearchResults:
 class TestDoWrite:
     @pytest.mark.asyncio
     async def test_store(self, mock_store, config):
+        # asearch returns empty → no duplicate → proceeds with astore
+        mock_store.asearch.return_value = []
         result = await _do_write(
             mock_store, config, "store", "hello", "", MemoryType.EPISODIC, "general", None, "merge"
         )
@@ -586,3 +603,375 @@ class TestMemoryToolSchema:
     def test_tool_description(self):
         assert "Search" in memory_tool._py_tool_description
         assert "store" in memory_tool._py_tool_description.lower()
+
+
+# ---------------------------------------------------------------------------
+# MemoryIntegration
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryIntegrationInit:
+    def test_default_mode_is_no_retrieval(self, mock_store):
+        mi = MemoryIntegration(store=mock_store)
+        assert mi.retrieval_mode == ReadMode.NO_RETRIEVAL
+
+    def test_accepts_string_mode(self, mock_store):
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="preload")
+        assert mi.retrieval_mode == ReadMode.PRELOAD
+
+    def test_accepts_enum_mode(self, mock_store):
+        mi = MemoryIntegration(store=mock_store, retrieval_mode=ReadMode.POSTLOAD)
+        assert mi.retrieval_mode == ReadMode.POSTLOAD
+
+    def test_invalid_string_mode_raises(self, mock_store):
+        with pytest.raises(ValueError):
+            MemoryIntegration(store=mock_store, retrieval_mode="invalid_mode")
+
+    def test_store_property(self, mock_store):
+        mi = MemoryIntegration(store=mock_store)
+        assert mi.store is mock_store
+
+
+class TestMemoryIntegrationPreloadNode:
+    def test_preload_mode_creates_node(self, mock_store):
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="preload")
+        assert mi.preload_node is not None
+        assert callable(mi.preload_node)
+
+    def test_no_retrieval_has_no_preload_node(self, mock_store):
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="no_retrieval")
+        assert mi.preload_node is None
+
+    def test_postload_has_no_preload_node(self, mock_store):
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="postload")
+        assert mi.preload_node is None
+
+    @pytest.mark.asyncio
+    async def test_preload_node_runs(self, mock_store, sample_search_results, config):
+        mock_store.asearch.return_value = sample_search_results
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="preload")
+        state = AgentState(
+            context=[Message.text_message("hello", role="user")]
+        )
+        result = await mi.preload_node(state, config)
+        assert len(result) == 1
+        assert result[0].role == "system"
+        assert "Long-term Memory Context" in result[0].text()
+
+    @pytest.mark.asyncio
+    async def test_preload_node_custom_template(self, mock_store, sample_search_results, config):
+        mock_store.asearch.return_value = sample_search_results
+        mi = MemoryIntegration(
+            store=mock_store,
+            retrieval_mode="preload",
+            preload_prompt_template="CUSTOM:\n{memories}",
+        )
+        state = AgentState(
+            context=[Message.text_message("hello", role="user")]
+        )
+        result = await mi.preload_node(state, config)
+        assert result[0].text().startswith("CUSTOM:")
+
+
+class TestMemoryIntegrationSystemPrompt:
+    def test_no_retrieval_prompt(self, mock_store):
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="no_retrieval")
+        prompt = mi.system_prompt
+        assert "memory_tool" in prompt
+        assert "do NOT" in prompt
+
+    def test_preload_prompt(self, mock_store):
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="preload")
+        prompt = mi.system_prompt
+        assert "memory context" in prompt.lower()
+        assert "memory_tool" in prompt
+
+    def test_postload_prompt(self, mock_store):
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="postload")
+        prompt = mi.system_prompt
+        assert "search" in prompt
+        assert "memory_tool" in prompt
+
+
+class TestMemoryIntegrationTools:
+    def test_tools_always_includes_memory_tool(self, mock_store):
+        for mode in ReadMode:
+            mi = MemoryIntegration(store=mock_store, retrieval_mode=mode)
+            assert memory_tool in mi.tools
+
+    def test_tools_returns_list(self, mock_store):
+        mi = MemoryIntegration(store=mock_store)
+        assert isinstance(mi.tools, list)
+        assert len(mi.tools) >= 1
+
+
+class TestMemoryIntegrationWire:
+    def test_wire_preload_adds_node_and_entry(self, mock_store):
+        from agentflow.graph import StateGraph
+
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="preload")
+        graph = StateGraph(AgentState())
+
+        async def dummy(state, config):
+            return state
+
+        graph.add_node("main", dummy)
+        mi.wire(graph, entry_to="main")
+
+        assert graph.entry_point == "memory_preload"
+        assert "memory_preload" in graph.nodes
+
+    def test_wire_no_retrieval_sets_entry_directly(self, mock_store):
+        from agentflow.graph import StateGraph
+
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="no_retrieval")
+        graph = StateGraph(AgentState())
+
+        async def dummy(state, config):
+            return state
+
+        graph.add_node("main", dummy)
+        mi.wire(graph, entry_to="main")
+
+        assert graph.entry_point == "main"
+        assert "memory_preload" not in graph.nodes
+
+    def test_wire_postload_sets_entry_directly(self, mock_store):
+        from agentflow.graph import StateGraph
+
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="postload")
+        graph = StateGraph(AgentState())
+
+        async def dummy(state, config):
+            return state
+
+        graph.add_node("main", dummy)
+        mi.wire(graph, entry_to="main")
+
+        assert graph.entry_point == "main"
+
+    def test_wire_custom_preload_name(self, mock_store):
+        from agentflow.graph import StateGraph
+
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="preload")
+        graph = StateGraph(AgentState())
+
+        async def dummy(state, config):
+            return state
+
+        graph.add_node("main", dummy)
+        mi.wire(graph, entry_to="main", preload_node_name="mem_load")
+
+        assert graph.entry_point == "mem_load"
+        assert "mem_load" in graph.nodes
+
+    def test_wire_preload_creates_edge(self, mock_store):
+        from agentflow.graph import StateGraph
+
+        mi = MemoryIntegration(store=mock_store, retrieval_mode="preload")
+        graph = StateGraph(AgentState())
+
+        async def dummy(state, config):
+            return state
+
+        graph.add_node("main", dummy)
+        mi.wire(graph, entry_to="main")
+
+        # Verify edge from preload → main exists
+        has_edge = any(
+            e.from_node == "memory_preload" and e.to_node == "main"
+            for e in graph.edges
+        )
+        assert has_edge
+
+
+# ---------------------------------------------------------------------------
+# Deduplication — _find_duplicate & _do_write dedup paths
+# ---------------------------------------------------------------------------
+
+
+class TestFindDuplicateByKey:
+    """Tests for the _find_duplicate_by_key helper."""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_match(self, mock_store):
+        mock_store.asearch.return_value = []
+        result = await _find_duplicate_by_key(
+            mock_store, {"user_id": "u1"}, "user_name", MemoryType.EPISODIC
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_match_when_key_exists(self, mock_store):
+        hit = MemorySearchResult(id="m1", content="Name is Atharv", score=0.90)
+        mock_store.asearch.return_value = [hit]
+        result = await _find_duplicate_by_key(
+            mock_store, {"user_id": "u1"}, "user_name", MemoryType.EPISODIC
+        )
+        assert result is hit
+        # Verify memory_key filter was passed
+        call_kwargs = mock_store.asearch.call_args[1]
+        assert call_kwargs["filters"] == {"memory_key": "user_name"}
+
+    @pytest.mark.asyncio
+    async def test_strips_thread_id_from_config(self, mock_store):
+        mock_store.asearch.return_value = []
+        await _find_duplicate_by_key(
+            mock_store,
+            {"user_id": "u1", "thread_id": "t1"},
+            "user_name",
+            MemoryType.EPISODIC,
+        )
+        called_config = mock_store.asearch.call_args[0][0]
+        assert "thread_id" not in called_config
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_exception(self, mock_store):
+        mock_store.asearch.side_effect = RuntimeError("boom")
+        result = await _find_duplicate_by_key(
+            mock_store, {"user_id": "u1"}, "user_name", MemoryType.EPISODIC
+        )
+        assert result is None
+
+
+class TestFindDuplicateBySimilarity:
+    """Tests for the _find_duplicate_by_similarity helper."""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_match(self, mock_store):
+        mock_store.asearch.return_value = []
+        result = await _find_duplicate_by_similarity(
+            mock_store, {"user_id": "u1"}, "some content", MemoryType.EPISODIC
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_match_above_threshold(self, mock_store):
+        hit = MemorySearchResult(id="m1", content="same", score=0.97)
+        mock_store.asearch.return_value = [hit]
+        result = await _find_duplicate_by_similarity(
+            mock_store, {"user_id": "u1"}, "same content", MemoryType.EPISODIC
+        )
+        assert result is hit
+
+    @pytest.mark.asyncio
+    async def test_strips_thread_id_from_config(self, mock_store):
+        mock_store.asearch.return_value = []
+        await _find_duplicate_by_similarity(
+            mock_store,
+            {"user_id": "u1", "thread_id": "t1"},
+            "content",
+            MemoryType.EPISODIC,
+        )
+        called_config = mock_store.asearch.call_args[0][0]
+        assert "thread_id" not in called_config
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_exception(self, mock_store):
+        mock_store.asearch.side_effect = RuntimeError("boom")
+        result = await _find_duplicate_by_similarity(
+            mock_store, {"user_id": "u1"}, "content", MemoryType.EPISODIC
+        )
+        assert result is None
+
+
+class TestDoWriteDedup:
+    """Tests for deduplication logic inside _do_write (action='store')."""
+
+    @pytest.mark.asyncio
+    async def test_store_updates_by_memory_key(self, mock_store, config):
+        """When memory_key is provided and a matching record exists → update."""
+        # First call (key search) returns a match; second (similarity) not reached
+        mock_store.asearch.return_value = [
+            MemorySearchResult(
+                id="existing-1",
+                content="User's name is Atharv",
+                score=0.50,
+                metadata={"memory_key": "user_name"},
+            )
+        ]
+        result = await _do_write(
+            mock_store, config, "store", "User's name is Prashant",
+            "", MemoryType.EPISODIC, "general",
+            {"memory_key": "user_name"}, "merge",
+        )
+        assert result["status"] == "updated_existing"
+        assert result["memory_id"] == "existing-1"
+        assert result["memory_key"] == "user_name"
+        mock_store.aupdate.assert_awaited_once()
+        mock_store.astore.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_skips_identical_duplicate(self, mock_store, config):
+        """Score >= 0.95 on similarity check → skip the write entirely."""
+        # No memory_key → falls through to similarity check
+        mock_store.asearch.return_value = [
+            MemorySearchResult(id="existing-1", content="My name is Atharv", score=0.97)
+        ]
+        result = await _do_write(
+            mock_store, config, "store", "My name is Atharv",
+            "", MemoryType.EPISODIC, "general", None, "merge",
+        )
+        assert result["status"] == "skipped_duplicate"
+        assert result["memory_id"] == "existing-1"
+        mock_store.astore.assert_not_awaited()
+        mock_store.aupdate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_new_when_key_not_found(self, mock_store, config):
+        """memory_key provided but no existing match → store new."""
+        mock_store.asearch.return_value = []
+        result = await _do_write(
+            mock_store, config, "store", "User's name is Prashant",
+            "", MemoryType.EPISODIC, "general",
+            {"memory_key": "user_name"}, "merge",
+        )
+        assert result["status"] == "stored"
+        mock_store.astore.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_store_proceeds_when_no_duplicate(self, mock_store, config):
+        """No match on key or similarity → normal store."""
+        mock_store.asearch.return_value = []
+        result = await _do_write(
+            mock_store, config, "store", "Brand new fact",
+            "", MemoryType.EPISODIC, "general", None, "merge",
+        )
+        assert result["status"] == "stored"
+        mock_store.astore.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_store_proceeds_when_dedup_search_fails(self, mock_store, config):
+        """If both dedup searches raise, fall through to normal store."""
+        mock_store.asearch.side_effect = RuntimeError("network error")
+        mock_store.astore.return_value = "new-id"
+        result = await _do_write(
+            mock_store, config, "store", "Some content",
+            "", MemoryType.EPISODIC, "general", None, "merge",
+        )
+        assert result["status"] == "stored"
+
+    @pytest.mark.asyncio
+    async def test_dedup_does_not_affect_update_action(self, mock_store, config):
+        """Dedup only applies to 'store'; 'update' should not trigger it."""
+        result = await _do_write(
+            mock_store, config, "update", "new text", "m1",
+            MemoryType.EPISODIC, "general", {"x": 1}, "replace",
+        )
+        assert result["status"] == "updated"
+        mock_store.asearch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dedup_does_not_affect_delete_action(self, mock_store, config):
+        """Dedup only applies to 'store'; 'delete' should not trigger it."""
+        result = await _do_write(
+            mock_store, config, "delete", "", "m1",
+            MemoryType.EPISODIC, "general", None, "merge",
+        )
+        assert result["status"] == "deleted"
+        mock_store.asearch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_identical_threshold_is_valid(self):
+        """Ensure threshold constant is valid."""
+        assert 0 < _IDENTICAL_SCORE_THRESHOLD <= 1.0
