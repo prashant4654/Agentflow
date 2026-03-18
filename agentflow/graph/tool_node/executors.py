@@ -13,7 +13,7 @@ from agentflow.publisher.publish import publish_event
 from agentflow.state import AgentState, ContentBlock, ErrorBlock, Message, ToolResultBlock
 from agentflow.utils import CallbackContext, CallbackManager, InvocationType, call_sync_or_async
 
-from .constants import INJECTABLE_PARAMS
+from .constants import INJECTABLE_PARAMS, has_injected_default
 
 
 logger = logging.getLogger("agentflow.graph.tool_node")
@@ -395,20 +395,12 @@ class LocalExecMixin:
             if param_name in INJECTABLE_PARAMS:
                 continue
 
-            if (
-                hasattr(param, "default")
-                and param.default is not inspect._empty
-                and hasattr(param.default, "__class__")
-            ):
-                try:
-                    if "Inject" in str(type(param.default)):
-                        logger.debug(
-                            "Skipping injectable parameter '%s' with Inject syntax",
-                            param_name,
-                        )
-                        continue
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.exception("Inject detection failed for '%s': %s", param_name, exc)
+            if has_injected_default(param):
+                logger.debug(
+                    "Skipping injectable parameter '%s' with Inject syntax",
+                    param_name,
+                )
+                continue
 
             if param_name in args:
                 input_data[param_name] = args[param_name]
@@ -679,7 +671,7 @@ class MCPMixin:
         tools: list[dict] = []
         if not self._client:
             return tools
-        
+
         try:
             async with self._client:
                 res = await self._client.ping()
@@ -706,9 +698,8 @@ class MCPMixin:
                         }
                     )
         except Exception as e:  # pragma: no cover - network/optional
-                logger.exception("Failed to fetch MCP tools: %s", e)
+            logger.exception("Failed to fetch MCP tools: %s", e)
 
-            
         return tools
 
     async def _mcp_execute(  # noqa: PLR0915
