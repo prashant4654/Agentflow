@@ -161,7 +161,7 @@ class PromptInjectionValidator(BaseValidator):
             r"(?i)developer\s+mode\s+(on|enabled?|activated?)",
             r"(?i)jailbreak\s+(mode|activated?)",
             # Known jailbreak personas (word boundaries to avoid false positives)
-            r"(?i)\b(?:APOPHIS|STAN|DUDE)\b",
+            r"\b(?:APOPHIS|STAN|DUDE)\b",
             # Template injection
             r"\{\{.*?\}\}",  # Jinja2-style
             r"\{%.*?%\}",  # Jinja2 control structures
